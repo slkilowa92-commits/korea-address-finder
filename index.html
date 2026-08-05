@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>엑셀 우편번호 자동 추가기</title>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#ffffff; --border:#e2e5ea; --text:#1c1f26; --muted:#6b7280;
+    --accent:#2563eb; --accent-dark:#1d4ed8; --ok:#16a34a; --warn:#d97706; --fail:#dc2626;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#15171c; --card:#1e2128; --border:#30343d; --text:#e8eaed; --muted:#9aa1ac;
+      --accent:#4f8cff; --accent-dark:#3b76e6; --ok:#3ecf76; --warn:#e0a233; --fail:#f16060; }
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Malgun Gothic",sans-serif;
+    background:var(--bg); color:var(--text); line-height:1.5; padding:32px 16px 80px;
+  }
+  .wrap{max-width:760px; margin:0 auto;}
+  h1{font-size:22px; margin:0 0 4px;}
+  .sub{color:var(--muted); font-size:14px; margin-bottom:28px;}
+  .card{
+    background:var(--card); border:1px solid var(--border); border-radius:12px;
+    padding:20px 22px; margin-bottom:16px;
+  }
+  .card h2{font-size:15px; margin:0 0 12px; display:flex; align-items:center; gap:8px;}
+  .step-num{
+    display:inline-flex; align-items:center; justify-content:center;
+    width:20px; height:20px; border-radius:50%; background:var(--accent); color:#fff;
+    font-size:12px; font-weight:600; flex-shrink:0;
+  }
+  label{font-size:13px; color:var(--muted); display:block; margin-bottom:6px;}
+  input[type=text], input[type=password], select{
+    width:100%; padding:9px 11px; border:1px solid var(--border); border-radius:8px;
+    background:var(--bg); color:var(--text); font-size:14px;
+  }
+  input[type=file]{font-size:13px; color:var(--text);}
+  .hint{font-size:12px; color:var(--muted); margin-top:8px;}
+  .hint a{color:var(--accent);}
+  details{font-size:13px; color:var(--muted); margin-top:10px;}
+  details summary{cursor:pointer; color:var(--accent);}
+  details ol{margin:8px 0 0; padding-left:20px;}
+  .row{display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;}
+  .row > div{flex:1; min-width:180px;}
+  button{
+    background:var(--accent); color:#fff; border:none; border-radius:8px;
+    padding:10px 18px; font-size:14px; font-weight:600; cursor:pointer;
+  }
+  button:hover{background:var(--accent-dark);}
+  button:disabled{background:var(--border); color:var(--muted); cursor:not-allowed;}
+  button.secondary{background:transparent; color:var(--accent); border:1px solid var(--accent);}
+  button.secondary:hover{background:var(--accent); color:#fff;}
+  .preview-table{width:100%; border-collapse:collapse; font-size:13px; margin-top:10px;}
+  .preview-table th, .preview-table td{
+    border:1px solid var(--border); padding:6px 8px; text-align:left; white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis; max-width:260px;
+  }
+  .preview-table th{background:var(--bg); color:var(--muted); font-weight:600;}
+  #progressWrap{display:none; margin-top:14px;}
+  #progressBar{height:8px; background:var(--border); border-radius:4px; overflow:hidden;}
+  #progressFill{height:100%; width:0%; background:var(--accent); transition:width .2s;}
+  #progressText{font-size:12px; color:var(--muted); margin-top:6px;}
+  .summary{display:flex; gap:18px; margin-top:14px; flex-wrap:wrap;}
+  .summary .stat{font-size:13px;}
+  .summary .stat b{font-size:18px; display:block;}
+  .ok b{color:var(--ok);} .warn b{color:var(--warn);} .fail b{color:var(--fail);}
+  #reviewList{max-height:220px; overflow-y:auto; font-size:12px; margin-top:10px;
+    border:1px solid var(--border); border-radius:8px; padding:8px 10px; background:var(--bg); display:none;}
+  #reviewList div{padding:3px 0; border-bottom:1px solid var(--border);}
+  #reviewList div:last-child{border-bottom:none;}
+  .badge{display:inline-block; font-size:11px; padding:1px 6px; border-radius:10px; margin-right:6px;}
+  .badge.warn{background:rgba(217,119,6,.15); color:var(--warn);}
+  .badge.fail{background:rgba(220,38,38,.15); color:var(--fail);}
+  #status{font-size:13px; margin-top:10px; min-height:18px;}
+  #status.err{color:var(--fail);}
+  #status.ok{color:var(--ok);}
+  footer{text-align:center; font-size:12px; color:var(--muted); margin-top:30px;}
+  .disabled-card{opacity:.5; pointer-events:none;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>엑셀 우편번호 자동 추가기</h1>
+  <div class="sub">주소가 적힌 엑셀 파일을 올리면, 주소 열을 자동으로 찾아 우편번호 열을 새로 추가해줍니다. 모든 처리는 이 브라우저 안에서만 이루어지며 파일이 서버로 전송되지 않습니다.</div>
+
+  <div class="card">
+    <h2><span class="step-num">1</span> 주소 검색 API 키</h2>
+    <label for="apiKey">행정안전부 도로명주소 API 승인키</label>
+    <input type="password" id="apiKey" placeholder="예: U01TX0FVVEgyMDI2...">
+    <div class="hint">
+      키가 없으신가요? 무료이며 휴대폰 인증만으로 바로 발급됩니다.
+      <details>
+        <summary>발급 방법 보기</summary>
+        <ol>
+          <li><a href="https://www.juso.go.kr" target="_blank" rel="noopener">juso.go.kr</a> 접속</li>
+          <li>상단 메뉴 <b>오픈API</b> → <b>신청하기</b> (또는 개발자센터 → OpenAPI 연계 등록)</li>
+          <li>휴대폰 본인인증으로 로그인/가입</li>
+          <li>서비스명 등 간단한 정보 입력 후 신청 → <b>승인키</b> 즉시 발급</li>
+        </ol>
+        키는 이 브라우저에만 저장되며(localStorage), 외부로 전송되지 않습니다.
+      </details>
+    </div>
+  </div>
+
+  <div class="card" id="fileCard">
+    <h2><span class="step-num">2</span> 엑셀 파일 업로드</h2>
+    <input type="file" id="fileInput" accept=".xlsx,.xls,.csv">
+    <div id="fileInfo" class="hint"></div>
+  </div>
+
+  <div class="card disabled-card" id="settingsCard">
+    <h2><span class="step-num">3</span> 시트 및 주소 열 확인</h2>
+    <div class="row">
+      <div>
+        <label for="sheetSelect">처리할 시트</label>
+        <select id="sheetSelect"></select>
+      </div>
+      <div>
+        <label for="colSelect">주소가 있는 열 (자동 감지됨 — 다르면 변경)</label>
+        <select id="colSelect"></select>
+      </div>
+    </div>
+    <table class="preview-table" id="previewTable"></table>
+  </div>
+
+  <div class="card disabled-card" id="runCard">
+    <h2><span class="step-num">4</span> 실행</h2>
+    <button id="runBtn">우편번호 추가 시작</button>
+    <button id="downloadBtn" class="secondary" style="display:none; margin-left:8px;">결과 파일 다운로드</button>
+    <div id="status"></div>
+    <div id="progressWrap">
+      <div id="progressBar"><div id="progressFill"></div></div>
+      <div id="progressText"></div>
+    </div>
+    <div class="summary" id="summary" style="display:none;">
+      <div class="stat ok"><b id="statOk">0</b>정상 확인</div>
+      <div class="stat warn"><b id="statWarn">0</b>확인 권장</div>
+      <div class="stat fail"><b id="statFail">0</b>조회 실패</div>
+    </div>
+    <div id="reviewList"></div>
+  </div>
+
+  <footer>우편번호 출처: 행정안전부 도로명주소 안내시스템(juso.go.kr) · 원본 파일의 색상/서식은 저장 과정에서 유지되지 않을 수 있으며, 주소·금액·날짜 등 값은 그대로 보존됩니다.</footer>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const apiKeyInput = $('apiKey');
+const fileInput = $('fileInput');
+const fileInfo = $('fileInfo');
+const settingsCard = $('settingsCard');
+const sheetSelect = $('sheetSelect');
+const colSelect = $('colSelect');
+const previewTable = $('previewTable');
+const runCard = $('runCard');
+const runBtn = $('runBtn');
+const downloadBtn = $('downloadBtn');
+const statusEl = $('status');
+const progressWrap = $('progressWrap');
+const progressFill = $('progressFill');
+const progressText = $('progressText');
+const summaryEl = $('summary');
+const reviewList = $('reviewList');
+
+apiKeyInput.value = localStorage.getItem('juso_api_key') || '';
+apiKeyInput.addEventListener('change', () => localStorage.setItem('juso_api_key', apiKeyInput.value.trim()));
+
+let workbook = null;
+let currentFileName = '';
+let resultWorkbookBlobUrl = null;
+
+const CITY_NAMES = ['서울특별시','부산광역시','대구광역시','인천광역시','광주광역시','대전광역시','울산광역시',
+  '세종특별자치시','경기도','강원특별자치도','강원도','충청북도','충청남도','전북특별자치도','전라북도',
+  '전라남도','경상북도','경상남도','제주특별자치도'];
+const ADDR_KEYWORDS = ['주소','address','addr','도로명','소재지'];
+const ROAD_RE = /[가-힣0-9]{2,}(로|길)\s*\d+/;
+
+function looksLikeAddress(v){
+  if(!v) return false;
+  const s = String(v).trim();
+  if(!s) return false;
+  if(ROAD_RE.test(s)) return true;
+  return CITY_NAMES.some(c => s.startsWith(c));
+}
+
+function sheetToAoa(ws){
+  return XLSX.utils.sheet_to_json(ws, {header:1, defval:'', raw:false});
+}
+
+fileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(!file) return;
+  currentFileName = file.name.replace(/\.[^.]+$/, '');
+  fileInfo.textContent = '읽는 중...';
+  const buf = await file.arrayBuffer();
+  workbook = XLSX.read(buf, {type:'array', cellDates:true});
+  fileInfo.textContent = `${file.name} 불러옴 · 시트 ${workbook.SheetNames.length}개`;
+
+  sheetSelect.innerHTML = '';
+  workbook.SheetNames.forEach(name => {
+    const opt = document.createElement('option');
+    opt.value = name; opt.textContent = name;
+    sheetSelect.appendChild(opt);
+  });
+
+  settingsCard.classList.remove('disabled-card');
+  runCard.classList.remove('disabled-card');
+  downloadBtn.style.display = 'none';
+  summaryEl.style.display = 'none';
+  reviewList.style.display = 'none';
+  statusEl.textContent = '';
+  statusEl.className = '';
+
+  refreshSheetPreview();
+});
+
+sheetSelect.addEventListener('change', refreshSheetPreview);
+colSelect.addEventListener('change', renderPreview);
+
+function refreshSheetPreview(){
+  const ws = workbook.Sheets[sheetSelect.value];
+  const aoa = sheetToAoa(ws);
+  const header = aoa[0] || [];
+  const dataRows = aoa.slice(1, 31);
+
+  let bestCol = -1;
+  for(let c = 0; c < header.length; c++){
+    const h = String(header[c] || '').toLowerCase();
+    if(ADDR_KEYWORDS.some(k => h.includes(k))){ bestCol = c; break; }
+  }
+  if(bestCol === -1){
+    let bestScore = 0;
+    const maxCol = Math.max(header.length, ...dataRows.map(r => r.length), 0);
+    for(let c = 0; c < maxCol; c++){
+      let hits = 0, total = 0;
+      for(const row of dataRows){
+        const v = row[c];
+        if(v === undefined || v === '') continue;
+        total++;
+        if(looksLikeAddress(v)) hits++;
+      }
+      if(total > 0 && hits/total > 0.5 && hits > bestScore){
+        bestScore = hits; bestCol = c;
+      }
+    }
+  }
+  if(bestCol === -1) bestCol = 0;
+
+  const maxCol = Math.max(header.length, ...dataRows.map(r => r.length), 1);
+  colSelect.innerHTML = '';
+  for(let c = 0; c < maxCol; c++){
+    const opt = document.createElement('option');
+    opt.value = c;
+    const letter = XLSX.utils.encode_col(c);
+    const h = header[c] ? ` — "${header[c]}"` : '';
+    opt.textContent = `${letter}열${h}`;
+    if(c === bestCol) opt.selected = true;
+    colSelect.appendChild(opt);
+  }
+  renderPreview();
+}
+
+function renderPreview(){
+  const ws = workbook.Sheets[sheetSelect.value];
+  const aoa = sheetToAoa(ws);
+  const col = parseInt(colSelect.value, 10);
+  const header = aoa[0] || [];
+  const sample = aoa.slice(1, 6);
+
+  let html = `<tr><th>${XLSX.utils.encode_col(col)}열${header[col] ? ' ('+header[col]+')' : ''} 값 미리보기</th></tr>`;
+  sample.forEach(row => {
+    const v = row[col] !== undefined ? row[col] : '';
+    html += `<tr><td>${String(v).replace(/</g,'&lt;')}</td></tr>`;
+  });
+  previewTable.innerHTML = html;
+}
+
+function norm(s){ return (s||'').toString().replace(/[^\p{L}\p{N}]/gu,'').toLowerCase(); }
+
+function getPrimaryKeyword(addr){
+  if(addr.includes(',')) return addr.split(',')[0].trim();
+  const stripped = addr.replace(/\([^()]*\)\s*$/,'').trim();
+  return stripped || addr.trim();
+}
+
+function getDongBuilding(addr){
+  let m = addr.match(/\(([^,()]+),\s*([^()]+)\)\s*$/);
+  if(m) return {dong: m[1].trim(), building: m[2].trim()};
+  m = addr.match(/\(([^()]+)\)\s*$/);
+  if(m) return {dong: m[1].trim(), building: null};
+  return {dong: null, building: null};
+}
+
+async function callJusoApi(keyword, apiKey){
+  const url = `https://business.juso.go.kr/addrlink/addrLinkApi.do?confmKey=${encodeURIComponent(apiKey)}&currentPage=1&countPerPage=10&keyword=${encodeURIComponent(keyword)}&resultType=json`;
+  const res = await fetch(url);
+  const data = await res.json();
+  const common = data.results.common;
+  return { ok: common.errorCode === '0' && parseInt(common.totalCount, 10) > 0, common, list: data.results.juso || [] };
+}
+
+function pickFrom(resp, building){
+  if(!resp || !resp.ok || !resp.list.length) return null;
+  const list = resp.list;
+  if(list.length === 1) return { ...list[0], _confidence: 'high' };
+  if(building){
+    const nb = norm(building);
+    if(nb){
+      for(const c of list){
+        const nbd = norm(c.bdNm || '');
+        const hay = norm((c.roadAddr || '') + ' ' + (c.bdNm || ''));
+        if((nbd && (nb.includes(nbd) || nbd.includes(nb))) || hay.includes(nb)){
+          return { ...c, _confidence: 'high' };
+        }
+      }
+    }
+  }
+  return { ...list[0], _confidence: 'low' };
+}
+
+async function lookupZip(addr, apiKey){
+  addr = String(addr).trim().replace(/[.\s]+$/, '');
+  if(!addr) return { zip: '', status: 'fail' };
+  const primary = getPrimaryKeyword(addr);
+  const { dong, building } = getDongBuilding(addr);
+
+  let best = pickFrom(await callJusoApi(primary, apiKey), building);
+  if(!best || best._confidence !== 'high'){
+    await sleep(120);
+    const alt = pickFrom(await callJusoApi(addr, apiKey), building);
+    if(alt && alt._confidence === 'high') best = alt;
+    else if(!best) best = alt;
+  }
+  if((!best || best._confidence !== 'high') && building){
+    await sleep(120);
+    const kw = (dong ? dong + ' ' : '') + building;
+    const alt2 = pickFrom(await callJusoApi(kw, apiKey), building);
+    if(alt2 && alt2._confidence === 'high') best = alt2;
+    else if(!best) best = alt2;
+  }
+  if(!best) return { zip: '', status: 'fail' };
+  return { zip: best.zipNo, status: best._confidence === 'high' ? 'ok' : 'warn' };
+}
+
+function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
+
+runBtn.addEventListener('click', async () => {
+  const apiKey = apiKeyInput.value.trim();
+  if(!apiKey){ setStatus('API 키를 입력해 주세요.', 'err'); return; }
+
+  runBtn.disabled = true;
+  downloadBtn.style.display = 'none';
+  summaryEl.style.display = 'none';
+  reviewList.style.display = 'none';
+  reviewList.innerHTML = '';
+  setStatus('API 키 확인 중...', '');
+
+  const test = await callJusoApi('서울특별시 중구 세종대로 110', apiKey).catch(() => null);
+  if(!test || (test.common.errorCode !== '0' && test.common.errorCode !== undefined && parseInt(test.common.totalCount,10) === 0 && test.common.errorMessage !== '정상')){
+    if(!test){
+      setStatus('API 호출에 실패했습니다. 네트워크 연결을 확인해 주세요.', 'err');
+      runBtn.disabled = false; return;
+    }
+  }
+  if(test && test.common.errorCode && test.common.errorCode !== '0'){
+    setStatus(`API 키 오류: ${test.common.errorMessage || test.common.errorCode}`, 'err');
+    runBtn.disabled = false; return;
+  }
+
+  const sheetName = sheetSelect.value;
+  const ws = workbook.Sheets[sheetName];
+  const col = parseInt(colSelect.value, 10);
+  const aoa = sheetToAoa(ws);
+  const addrs = aoa.slice(1).map(row => (row[col] !== undefined ? String(row[col]).trim() : ''));
+  const total = addrs.length;
+
+  const uniqueAddrs = [...new Set(addrs.filter(a => a))];
+  const cache = new Map();
+
+  progressWrap.style.display = 'block';
+  setStatus('', '');
+
+  let done = 0;
+  for(const addr of uniqueAddrs){
+    const result = await lookupZip(addr, apiKey);
+    cache.set(addr, result);
+    done++;
+    const pct = Math.round(done / uniqueAddrs.length * 100);
+    progressFill.style.width = pct + '%';
+    progressText.textContent = `${done} / ${uniqueAddrs.length} 건 조회 중 (중복 주소 포함 전체 ${total}행)`;
+    await sleep(80);
+  }
+
+  let okCount = 0, warnCount = 0, failCount = 0;
+  const reviewItems = [];
+  addrs.forEach((addr, idx) => {
+    if(!addr){ failCount++; return; }
+    const r = cache.get(addr);
+    if(r.status === 'ok') okCount++;
+    else if(r.status === 'warn'){ warnCount++; reviewItems.push({row: idx+2, addr, zip: r.zip, level:'warn'}); }
+    else { failCount++; reviewItems.push({row: idx+2, addr, zip: '', level:'fail'}); }
+  });
+
+  // append zip column at the end of the sheet, existing cells untouched
+  const range = XLSX.utils.decode_range(ws['!ref']);
+  const newCol = range.e.c + 1;
+  XLSX.utils.sheet_add_aoa(ws, [['우편번호']], { origin: { r: 0, c: newCol } });
+  addrs.forEach((addr, idx) => {
+    const zip = addr ? (cache.get(addr).zip || '') : '';
+    XLSX.utils.sheet_add_aoa(ws, [[zip]], { origin: { r: idx + 1, c: newCol } });
+  });
+  const newRange = { s: range.s, e: { r: Math.max(range.e.r, addrs.length), c: newCol } };
+  ws['!ref'] = XLSX.utils.encode_range(newRange);
+
+  const wbout = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([wbout], { type: 'application/octet-stream' });
+  if(resultWorkbookBlobUrl) URL.revokeObjectURL(resultWorkbookBlobUrl);
+  resultWorkbookBlobUrl = URL.createObjectURL(blob);
+  downloadBtn.dataset.filename = `${currentFileName}_우편번호추가.xlsx`;
+
+  $('statOk').textContent = okCount;
+  $('statWarn').textContent = warnCount;
+  $('statFail').textContent = failCount;
+  summaryEl.style.display = 'flex';
+
+  if(reviewItems.length){
+    reviewList.style.display = 'block';
+    reviewList.innerHTML = reviewItems.map(it =>
+      `<div><span class="badge ${it.level}">${it.level === 'warn' ? '확인권장' : '실패'}</span>${it.row}행: ${it.addr.slice(0,60)} ${it.zip ? '→ '+it.zip : ''}</div>`
+    ).join('');
+  }
+
+  setStatus('완료되었습니다. 결과 파일을 다운로드하세요.', 'ok');
+  downloadBtn.style.display = 'inline-block';
+  runBtn.disabled = false;
+});
+
+downloadBtn.addEventListener('click', () => {
+  if(!resultWorkbookBlobUrl) return;
+  const a = document.createElement('a');
+  a.href = resultWorkbookBlobUrl;
+  a.download = downloadBtn.dataset.filename || 'result.xlsx';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+});
+
+function setStatus(msg, cls){
+  statusEl.textContent = msg;
+  statusEl.className = cls || '';
+}
+</script>
+</body>
+</html>
