@@ -91,9 +91,10 @@
     <label for="apiKey">행정안전부 도로명주소 API 승인키</label>
     <input type="password" id="apiKey" placeholder="예: U01TX0FVVEgyMDI2...">
     <div class="hint">
-      키가 없으신가요? 무료이며 휴대폰 인증만으로 바로 발급됩니다.
+      기본 키가 미리 입력되어 있어 바로 업로드하셔도 됩니다. 이 키는 하루 조회량이 여러 사람과 공유되므로,
+      대량 파일을 자주 처리하신다면 본인 키로 바꿔 쓰시는 걸 권장합니다.
       <details>
-        <summary>발급 방법 보기</summary>
+        <summary>내 키로 직접 발급받기</summary>
         <ol>
           <li><a href="https://www.juso.go.kr" target="_blank" rel="noopener">juso.go.kr</a> 접속</li>
           <li>상단 메뉴 <b>오픈API</b> → <b>신청하기</b> (또는 개발자센터 → OpenAPI 연계 등록)</li>
@@ -139,6 +140,7 @@
       <div class="stat ok"><b id="statOk">0</b>정상 확인</div>
       <div class="stat warn"><b id="statWarn">0</b>확인 권장</div>
       <div class="stat fail"><b id="statFail">0</b>조회 실패</div>
+      <div class="stat"><b id="statSkip">0</b>주소 아님(건너뜀)</div>
     </div>
     <div id="reviewList"></div>
   </div>
@@ -165,7 +167,8 @@ const progressText = $('progressText');
 const summaryEl = $('summary');
 const reviewList = $('reviewList');
 
-apiKeyInput.value = localStorage.getItem('juso_api_key') || '';
+const DEFAULT_API_KEY = 'U01TX0FVVEgyMDI2MDgwNTE0MDEzMzExOTkxMzI=';
+apiKeyInput.value = localStorage.getItem('juso_api_key') || DEFAULT_API_KEY;
 apiKeyInput.addEventListener('change', () => localStorage.setItem('juso_api_key', apiKeyInput.value.trim()));
 
 let workbook = null;
@@ -280,26 +283,51 @@ function renderPreview(){
 
 function norm(s){ return (s||'').toString().replace(/[^\p{L}\p{N}]/gu,'').toLowerCase(); }
 
+const ROAD_NUM_RE = /^(.*(?:로|길)\s*\d+(?:-\d+)?)/;
+
 function getPrimaryKeyword(addr){
+  const m = addr.match(ROAD_NUM_RE);
+  if(m) return m[1].trim();
   if(addr.includes(',')) return addr.split(',')[0].trim();
   const stripped = addr.replace(/\([^()]*\)\s*$/,'').trim();
   return stripped || addr.trim();
 }
 
 function getDongBuilding(addr){
-  let m = addr.match(/\(([^,()]+),\s*([^()]+)\)\s*$/);
+  let m = addr.match(/\(([^,()]+),\s*([^()]+)\)/);
   if(m) return {dong: m[1].trim(), building: m[2].trim()};
-  m = addr.match(/\(([^()]+)\)\s*$/);
-  if(m) return {dong: m[1].trim(), building: null};
+  m = addr.match(/\(([^()]+)\)/);
+  if(m){
+    const content = m[1].trim();
+    // a lone parenthetical is a dong/리 name only if it looks like one;
+    // otherwise (e.g. "(래미안서초스위트)") it's a building/complex name.
+    if(/^[가-힣0-9]{1,6}(동|리|가)$/.test(content)) return {dong: content, building: null};
+    return {dong: null, building: content};
+  }
+  // no parentheses at all: "도로명 번지, 건물명 [숫자동] [숫자호]" — pull a
+  // building-name guess out of the part after the comma.
+  if(addr.includes(',')){
+    let rest = addr.split(',').slice(1).join(',').trim();
+    rest = rest.replace(/\d+(-\d+)?\s*동\b/g, ' ').replace(/\d+(-\d+)?\s*호\s*$/, ' ').trim();
+    rest = rest.replace(/\s{2,}/g, ' ').trim();
+    if(rest) return {dong: null, building: rest};
+  }
   return {dong: null, building: null};
 }
 
-async function callJusoApi(keyword, apiKey){
+async function callJusoApi(keyword, apiKey, retries = 2){
   const url = `https://business.juso.go.kr/addrlink/addrLinkApi.do?confmKey=${encodeURIComponent(apiKey)}&currentPage=1&countPerPage=10&keyword=${encodeURIComponent(keyword)}&resultType=json`;
-  const res = await fetch(url);
-  const data = await res.json();
-  const common = data.results.common;
-  return { ok: common.errorCode === '0' && parseInt(common.totalCount, 10) > 0, common, list: data.results.juso || [] };
+  for(let attempt = 0; attempt <= retries; attempt++){
+    try{
+      const res = await fetch(url);
+      const data = await res.json();
+      const common = data.results.common;
+      return { ok: common.errorCode === '0' && parseInt(common.totalCount, 10) > 0, common, list: data.results.juso || [] };
+    }catch(e){
+      if(attempt === retries) return { ok: false, common: { errorCode: 'NETWORK', errorMessage: String(e && e.message || e) }, list: [] };
+      await sleep(300 * (attempt + 1));
+    }
+  }
 }
 
 function pickFrom(resp, building){
@@ -309,12 +337,18 @@ function pickFrom(resp, building){
   if(building){
     const nb = norm(building);
     if(nb){
-      for(const c of list){
+      const matches = list.filter(c => {
         const nbd = norm(c.bdNm || '');
         const hay = norm((c.roadAddr || '') + ' ' + (c.bdNm || ''));
-        if((nbd && (nb.includes(nbd) || nbd.includes(nb))) || hay.includes(nb)){
-          return { ...c, _confidence: 'high' };
-        }
+        return (nbd && (nb.includes(nbd) || nbd.includes(nb))) || hay.includes(nb);
+      });
+      // trust the match only if every name-matching candidate agrees on the
+      // zip code — a generic complex name (e.g. "서정마을") can span many
+      // differently-numbered 단지 with different zips, and one candidate
+      // happening to be registered under the bare generic name doesn't
+      // resolve that ambiguity, so that case must stay low-confidence.
+      if(matches.length && new Set(matches.map(c => c.zipNo)).size === 1){
+        return { ...matches[0], _confidence: 'high' };
       }
     }
   }
@@ -377,27 +411,32 @@ runBtn.addEventListener('click', async () => {
   const addrs = aoa.slice(1).map(row => (row[col] !== undefined ? String(row[col]).trim() : ''));
   const total = addrs.length;
 
-  const uniqueAddrs = [...new Set(addrs.filter(a => a))];
+  // rows whose "address" cell doesn't actually look like an address (repeated
+  // section header rows, section-title rows, stray labels, etc.) are skipped
+  // entirely rather than sent to the API — sending literal header text like
+  // "주소" as a search keyword returns a bogus but "successful" match.
+  const lookupTargets = [...new Set(addrs.filter(a => a && looksLikeAddress(a)))];
   const cache = new Map();
 
   progressWrap.style.display = 'block';
   setStatus('', '');
 
   let done = 0;
-  for(const addr of uniqueAddrs){
+  for(const addr of lookupTargets){
     const result = await lookupZip(addr, apiKey);
     cache.set(addr, result);
     done++;
-    const pct = Math.round(done / uniqueAddrs.length * 100);
+    const pct = lookupTargets.length ? Math.round(done / lookupTargets.length * 100) : 100;
     progressFill.style.width = pct + '%';
-    progressText.textContent = `${done} / ${uniqueAddrs.length} 건 조회 중 (중복 주소 포함 전체 ${total}행)`;
+    progressText.textContent = `${done} / ${lookupTargets.length} 건 조회 중 (중복 주소 포함 전체 ${total}행)`;
     await sleep(80);
   }
 
-  let okCount = 0, warnCount = 0, failCount = 0;
+  let okCount = 0, warnCount = 0, failCount = 0, skipCount = 0;
   const reviewItems = [];
   addrs.forEach((addr, idx) => {
-    if(!addr){ failCount++; return; }
+    if(!addr) return;
+    if(!looksLikeAddress(addr)){ skipCount++; return; }
     const r = cache.get(addr);
     if(r.status === 'ok') okCount++;
     else if(r.status === 'warn'){ warnCount++; reviewItems.push({row: idx+2, addr, zip: r.zip, level:'warn'}); }
@@ -409,7 +448,7 @@ runBtn.addEventListener('click', async () => {
   const newCol = range.e.c + 1;
   XLSX.utils.sheet_add_aoa(ws, [['우편번호']], { origin: { r: 0, c: newCol } });
   addrs.forEach((addr, idx) => {
-    const zip = addr ? (cache.get(addr).zip || '') : '';
+    const zip = (addr && cache.has(addr)) ? (cache.get(addr).zip || '') : '';
     XLSX.utils.sheet_add_aoa(ws, [[zip]], { origin: { r: idx + 1, c: newCol } });
   });
   const newRange = { s: range.s, e: { r: Math.max(range.e.r, addrs.length), c: newCol } };
@@ -424,6 +463,7 @@ runBtn.addEventListener('click', async () => {
   $('statOk').textContent = okCount;
   $('statWarn').textContent = warnCount;
   $('statFail').textContent = failCount;
+  $('statSkip').textContent = skipCount;
   summaryEl.style.display = 'flex';
 
   if(reviewItems.length){
